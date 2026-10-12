@@ -25,6 +25,7 @@ add_library(AroxornCore
     src/Pipeline.cpp
     src/AccelerationStructure.cpp
     src/RayTracingPipeline.cpp
+    src/MemoryAllocator.cpp
 )
 
 target_include_directories(AroxornCore PUBLIC

@@ -3,8 +3,8 @@
 
 namespace Aroxorn {
 
-    AccelerationStructure::AccelerationStructure(Device& device, VkAccelerationStructureTypeKHR type, VkDeviceSize size)
-        : m_Device(device) {
+    AccelerationStructure::AccelerationStructure(Device& device, MemoryAllocator& allocator, VkAccelerationStructureTypeKHR type, VkDeviceSize size)
+        : m_Device(device), m_Allocator(allocator) {
 
         CreateBuffer(
             size,
@@ -15,6 +15,7 @@ namespace Aroxorn {
         VkAccelerationStructureCreateInfoKHR createInfo{};
         createInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR;
         createInfo.buffer = m_Buffer;
+        createInfo.offset = m_Allocation.offset;
         createInfo.size = size;
         createInfo.type = type;
 
@@ -47,7 +48,9 @@ namespace Aroxorn {
         }
 
         vkDestroyBuffer(m_Device.GetVkDevice(), m_Buffer, nullptr);
-        vkFreeMemory(m_Device.GetVkDevice(), m_Memory, nullptr);
+
+        // Free via Aroxorn custom allocator
+        m_Allocator.Free(m_Allocation);
     }
 
     void AccelerationStructure::CreateBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties) {
@@ -64,34 +67,11 @@ namespace Aroxorn {
         VkMemoryRequirements memRequirements;
         vkGetBufferMemoryRequirements(m_Device.GetVkDevice(), m_Buffer, &memRequirements);
 
-        VkMemoryAllocateFlagsInfo allocFlagsInfo{};
-        allocFlagsInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO;
-        allocFlagsInfo.flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT;
+        // Sub-allocate via Aroxorn Free-List (false for useLinear, true for threadSafe)
+        m_Allocation = m_Allocator.Allocate(memRequirements, properties, false, true);
 
-        VkMemoryAllocateInfo allocInfo{};
-        allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-        allocInfo.allocationSize = memRequirements.size;
-        allocInfo.memoryTypeIndex = FindMemoryType(memRequirements.memoryTypeBits, properties);
-        allocInfo.pNext = &allocFlagsInfo;
-
-        if (vkAllocateMemory(m_Device.GetVkDevice(), &allocInfo, nullptr, &m_Memory) != VK_SUCCESS) {
-            throw std::runtime_error("Failed to allocate acceleration structure buffer memory!");
-        }
-
-        vkBindBufferMemory(m_Device.GetVkDevice(), m_Buffer, m_Memory, 0);
-    }
-
-    uint32_t AccelerationStructure::FindMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties) {
-        VkPhysicalDeviceMemoryProperties memProperties;
-        vkGetPhysicalDeviceMemoryProperties(m_Device.GetVkPhysicalDevice(), &memProperties);
-
-        for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++) {
-            if ((typeFilter & (1 << i)) && (memProperties.memoryTypes[i].propertyFlags & properties) == properties) {
-                return i;
-            }
-        }
-
-        throw std::runtime_error("Failed to find suitable memory type!");
+        // Bind the sub-allocated chunk using offset
+        vkBindBufferMemory(m_Device.GetVkDevice(), m_Buffer, m_Allocation.memory, m_Allocation.offset);
     }
 
 }

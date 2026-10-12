@@ -1,12 +1,13 @@
 #pragma once
 
 #include "Aroxorn/Device.hpp"
+#include "Aroxorn/MemoryAllocator.hpp"
 
 namespace Aroxorn {
 
     class AccelerationStructure {
     public:
-        AccelerationStructure(Device& device, VkAccelerationStructureTypeKHR type, VkDeviceSize size);
+        AccelerationStructure(Device& device, MemoryAllocator& allocator, VkAccelerationStructureTypeKHR type, VkDeviceSize size);
         ~AccelerationStructure();
 
         AccelerationStructure(const AccelerationStructure&) = delete;
@@ -17,14 +18,14 @@ namespace Aroxorn {
 
     private:
         Device& m_Device;
+        MemoryAllocator& m_Allocator;
 
         VkAccelerationStructureKHR m_Handle = VK_NULL_HANDLE;
         VkBuffer m_Buffer = VK_NULL_HANDLE;
-        VkDeviceMemory m_Memory = VK_NULL_HANDLE;
+        Allocation m_Allocation{};
         VkDeviceAddress m_DeviceAddress = 0;
 
         void CreateBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties);
-        uint32_t FindMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties);
     };
 
 }
