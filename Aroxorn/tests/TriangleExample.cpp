@@ -1,8 +1,9 @@
 #include "Aroxorn/Instance.hpp"
 #include "Aroxorn/Device.hpp"
 #include "Aroxorn/Swapchain.hpp"
-#include "Aroxorn/CommandBuffer.hpp"
+#include "Aroxorn/CommandRecorder.hpp"
 #include "Aroxorn/Pipeline.hpp"
+#include "Aroxorn/MemoryAllocator.hpp"
 
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
@@ -27,9 +28,10 @@ private:
 
     std::unique_ptr<Aroxorn::Instance> aroxornInstance;
     std::unique_ptr<Aroxorn::Device> aroxornDevice;
+    std::unique_ptr<Aroxorn::MemoryAllocator> aroxornAllocator;
     std::unique_ptr<Aroxorn::Swapchain> aroxornSwapchain;
     std::unique_ptr<Aroxorn::Pipeline> aroxornPipeline;
-    std::unique_ptr<Aroxorn::CommandBuffer> aroxornCommandBuffer;
+    std::unique_ptr<Aroxorn::CommandRecorder> aroxornCommandRecorder;
 
     VkSurfaceKHR surface;
     VkRenderPass renderPass;
@@ -54,6 +56,7 @@ private:
         }
 
         aroxornDevice = std::make_unique<Aroxorn::Device>(*aroxornInstance, surface);
+        aroxornAllocator = std::make_unique<Aroxorn::MemoryAllocator>(*aroxornDevice);
         aroxornSwapchain = std::make_unique<Aroxorn::Swapchain>(*aroxornDevice, surface, WIDTH, HEIGHT);
 
         createRenderPass();
@@ -61,7 +64,8 @@ private:
 
         aroxornPipeline = std::make_unique<Aroxorn::Pipeline>(*aroxornDevice, "../shaders/vert.spv", "../shaders/frag.spv", aroxornSwapchain->GetExtent(), renderPass);
 
-        aroxornCommandBuffer = std::make_unique<Aroxorn::CommandBuffer>(*aroxornDevice);
+        Aroxorn::QueueFamilyIndices indices = aroxornDevice->FindQueueFamilies(aroxornDevice->GetVkPhysicalDevice());
+        aroxornCommandRecorder = std::make_unique<Aroxorn::CommandRecorder>(*aroxornDevice, indices.graphicsFamily.value());
 
         createSyncObjects();
     }
@@ -146,36 +150,19 @@ private:
         }
     }
 
-    void recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex) {
-        VkCommandBufferBeginInfo beginInfo{};
-        beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-
-        if (vkBeginCommandBuffer(commandBuffer, &beginInfo) != VK_SUCCESS) {
-            throw std::runtime_error("failed to begin recording command buffer!");
-        }
-
-        VkRenderPassBeginInfo renderPassInfo{};
-        renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-        renderPassInfo.renderPass = renderPass;
-        renderPassInfo.framebuffer = swapChainFramebuffers[imageIndex];
-        renderPassInfo.renderArea.offset = {0, 0};
-        renderPassInfo.renderArea.extent = aroxornSwapchain->GetExtent();
+    void recordCommandBuffer(uint32_t imageIndex) {
+        aroxornCommandRecorder->Begin();
 
         VkClearValue clearColor = {{{0.0f, 0.0f, 0.0f, 1.0f}}};
-        renderPassInfo.clearValueCount = 1;
-        renderPassInfo.pClearValues = &clearColor;
+        aroxornCommandRecorder->BeginRenderPass(renderPass, swapChainFramebuffers[imageIndex], aroxornSwapchain->GetExtent(), &clearColor, 1);
 
-        vkCmdBeginRenderPass(commandBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+        aroxornCommandRecorder->BindGraphicsPipeline(aroxornPipeline->GetVkPipeline());
 
-        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, aroxornPipeline->GetVkPipeline());
+        aroxornCommandRecorder->Draw(3, 1, 0, 0);
 
-        vkCmdDraw(commandBuffer, 3, 1, 0, 0);
+        aroxornCommandRecorder->EndRenderPass();
 
-        vkCmdEndRenderPass(commandBuffer);
-
-        if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
-            throw std::runtime_error("failed to record command buffer!");
-        }
+        aroxornCommandRecorder->End();
     }
 
     void drawFrame() {
@@ -185,8 +172,11 @@ private:
         uint32_t imageIndex;
         vkAcquireNextImageKHR(aroxornDevice->GetVkDevice(), aroxornSwapchain->GetVkSwapchain(), UINT64_MAX, imageAvailableSemaphore, VK_NULL_HANDLE, &imageIndex);
 
-        vkResetCommandBuffer(aroxornCommandBuffer->GetVkCommandBuffer(), 0);
-        recordCommandBuffer(aroxornCommandBuffer->GetVkCommandBuffer(), imageIndex);
+        // Reset the linear allocator memory block for the new frame
+        aroxornAllocator->ResetLinear(false);
+        vkResetCommandBuffer(aroxornCommandRecorder->GetVkCommandBuffer(), 0);
+
+        recordCommandBuffer(imageIndex);
 
         VkSubmitInfo submitInfo{};
         submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -197,7 +187,7 @@ private:
         submitInfo.pWaitSemaphores = waitSemaphores;
         submitInfo.pWaitDstStageMask = waitStages;
 
-        VkCommandBuffer cBuffer = aroxornCommandBuffer->GetVkCommandBuffer();
+        VkCommandBuffer cBuffer = aroxornCommandRecorder->GetVkCommandBuffer();
         submitInfo.commandBufferCount = 1;
         submitInfo.pCommandBuffers = &cBuffer;
 
@@ -246,9 +236,10 @@ private:
 
         vkDestroyRenderPass(aroxornDevice->GetVkDevice(), renderPass, nullptr);
 
-        aroxornCommandBuffer.reset();
+        aroxornCommandRecorder.reset();
         aroxornPipeline.reset();
         aroxornSwapchain.reset();
+        aroxornAllocator.reset();
         aroxornDevice.reset();
 
         vkDestroySurfaceKHR(aroxornInstance->GetVkInstance(), surface, nullptr);
