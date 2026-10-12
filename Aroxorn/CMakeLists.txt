@@ -23,6 +23,8 @@ add_library(AroxornCore
     src/Swapchain.cpp
     src/CommandBuffer.cpp
     src/Pipeline.cpp
+    src/AccelerationStructure.cpp
+    src/RayTracingPipeline.cpp
 )
 
 target_include_directories(AroxornCore PUBLIC
